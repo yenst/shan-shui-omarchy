@@ -21,7 +21,8 @@ echo "Building (takes a minute the first time)..."
 cargo build --release --locked
 
 mkdir -p "$DEST"
-install -m755 target/release/shan-shui "$DEST/shan-shui"
+target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
+install -m755 "$target_dir/release/shan-shui" "$DEST/shan-shui"
 install -m755 scripts/omarchy-launch-screensaver "$DEST/omarchy-launch-screensaver"
 
 # Put $DEST first on PATH for login shells. Omarchy's idle timer and menu run
