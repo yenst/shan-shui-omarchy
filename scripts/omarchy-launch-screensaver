@@ -1,0 +1,60 @@
+#!/bin/bash
+
+# Shan-shui screensaver for Omarchy. install.sh puts this script first on PATH
+# (via ~/.bashrc, which the idle timer and menu read through `bash -lc`), so it
+# shadows the stock omarchy-launch-screensaver and opens one native fullscreen
+# window per monitor instead of a terminal. Falls back to the stock launcher if
+# the shan-shui binary is missing.
+
+here=$(dirname "$(readlink -f "$0")")
+SHAN_SHUI=${SHAN_SHUI:-$here/shan-shui}
+[[ -x $SHAN_SHUI ]] || SHAN_SHUI=$(command -v shan-shui)
+STOCK="${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-launch-screensaver"
+
+if [[ ! -x $SHAN_SHUI ]]; then
+  exec "$STOCK" "$@"
+fi
+
+# Exit early if screensaver is already running
+pgrep -f '[o]rg.omarchy.screensaver' >/dev/null && exit 0
+
+# Allow screensaver to be turned off but also force started
+if omarchy-toggle-enabled screensaver-off && [[ $1 != "force" ]]; then
+  exit 1
+fi
+
+# Extra flags (default 20 fps), e.g. SHAN_SHUI_ARGS="--fps 30 --speed 25"
+read -ra extra <<<"${SHAN_SHUI_ARGS:---fps 20}"
+
+focused=$(omarchy-hyprland-monitor-focused)
+
+hypr_focus_monitor() {
+  hyprctl dispatch "hl.dsp.focus({ monitor = \"$1\" })" >/dev/null 2>&1 || hyprctl dispatch focusmonitor "$1" >/dev/null
+}
+
+hypr_exec() {
+  local command
+  printf -v command '%q ' "$@"
+  hyprctl dispatch "hl.dsp.exec_cmd([[$command]])" >/dev/null 2>&1 || hyprctl dispatch exec -- bash -lc "$command" >/dev/null
+}
+
+SOCKET="$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock"
+exec {events}< <(socat -U - "UNIX-CONNECT:$SOCKET")
+
+wait_for_screensaver_window() {
+  local line deadline=$((SECONDS + 5))
+  while ((SECONDS < deadline)) && IFS= read -r -t $((deadline - SECONDS)) -u "$events" line; do
+    [[ $line == openwindow\>\>*,org.omarchy.screensaver,* ]] && return 0
+  done
+}
+
+# One shared seed so every monitor shows the same landscape
+seed=$RANDOM$RANDOM
+
+for m in $(hyprctl monitors -j | jq -r '.[] | .name'); do
+  hypr_focus_monitor "$m"
+  hypr_exec "$SHAN_SHUI" --app-id org.omarchy.screensaver --seed "$seed" "${extra[@]}"
+  wait_for_screensaver_window
+done
+
+hypr_focus_monitor "$focused"
