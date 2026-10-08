@@ -4,6 +4,15 @@ An endless, slowly scrolling Chinese landscape painting (山水) as your
 [Omarchy](https://omarchy.org) screensaver, drawn in your current theme's
 colors.
 
+**Install with one command** (on Omarchy, no Rust needed):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/yenst/shan-shui-omarchy/main/install.sh | bash
+```
+
+Then `omarchy-launch-screensaver force` to see it. Details are under
+[Install](#install).
+
 ![Original paper colors](docs/paper.jpg)
 ![Tokyo Night](docs/tokyo-night.jpg)
 ![Catppuccin Latte](docs/catppuccin-latte.jpg)
