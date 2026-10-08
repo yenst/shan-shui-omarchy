@@ -16,62 +16,65 @@ the ink and its background the paper, so dark themes get light ink on dark
 paper. It reads the theme each time it starts, so it follows your theme
 changes.
 
+You watch it being painted: the right side of the screen is blank paper, and
+each mountain, tree and pavilion is drawn in stroke by stroke as it scrolls
+in, the way the original paints it: outline, then hatching, then trees and
+houses.
+
 It also uses less power than the stock screensaver: about a quarter of the CPU
 and half the memory on a 2880×1920 laptop screen.
 
 ## Install
 
-You need Omarchy (Hyprland) and a Rust toolchain.
-
-1. **Install Rust**, if you don't have it yet:
-
-   ```sh
-   omarchy install dev-env rust
-   ```
-
-   Then open a new terminal.
-
-2. **Download and install shan-shui:**
-
-   ```sh
-   git clone https://github.com/yenst/shan-shui-omarchy.git
-   cd shan-shui-omarchy
-   ./install.sh
-   ```
-
-   The first build takes a minute or two.
-
-3. **Try it:**
-
-   ```sh
-   omarchy-launch-screensaver force
-   ```
-
-   Move the mouse or press any key to close it.
-
-That's it. From now on it starts whenever your screensaver would (after 2.5
-minutes idle by default), and from **Menu → System → Screensaver**. You can
-delete the cloned folder afterwards; everything it needs is installed into
-`~/.local/share/shan-shui`.
-
-## Uninstall
+On an Omarchy machine, run:
 
 ```sh
-./uninstall.sh
+curl -fsSL https://raw.githubusercontent.com/yenst/shan-shui-omarchy/main/install.sh | bash
 ```
 
-If you already deleted the folder, the same thing by hand:
+Then try it:
+
+```sh
+omarchy-launch-screensaver force
+```
+
+Move the mouse or press any key to close it.
+
+That's it. From now on it starts whenever your screensaver would (after 2.5
+minutes idle by default), and from **Menu → System → Screensaver**. It
+downloads a prebuilt program from this repo's
+[Releases](https://github.com/yenst/shan-shui-omarchy/releases), checks its
+checksum, and installs everything into `~/.local/share/shan-shui`. No Rust
+needed.
+
+Rather read the script first? Clone the repo and run it from there; it does
+the same thing:
+
+```sh
+git clone https://github.com/yenst/shan-shui-omarchy.git
+cd shan-shui-omarchy
+./install.sh
+```
+
+### Build from source
+
+To compile it yourself instead of downloading, install Rust
+(`omarchy install dev-env rust`, then open a new terminal) and run
+`./install.sh --build` in a clone. The installer also falls back to this if
+the download fails.
+
+## Update
+
+Run the install command again.
+
+## Uninstall
 
 ```sh
 rm -rf ~/.local/share/shan-shui
 sed -i '/# >>> shan-shui screensaver >>>/,/# <<< shan-shui screensaver <<</d' ~/.bashrc
 ```
 
-## Update
-
-```sh
-cd shan-shui-omarchy && git pull && ./install.sh
-```
+(Or `./uninstall.sh` from a clone, which does the same.)
 
 ## Tweaking
 
@@ -86,8 +89,10 @@ example `--fps 30 --speed 25` scrolls faster and smoother at a bit more CPU.
 --zoom F          zoom out with values below 1 to see more landscape
 --paper           the original's warm paper and black ink instead of your theme
 --grain F         paper grain strength 0..1 (default 0.5)
+--no-draw         show the painting finished instead of drawing it
 --windowed        run in a normal window
 --png PATH        render a single frame to an image
+--version         print the installed version
 ```
 
 Toggling the screensaver off in Omarchy (**Menu → Trigger → Toggle →
@@ -107,6 +112,13 @@ The replacement opens one native fullscreen window per monitor, with the same
 window class as the stock screensaver, so Omarchy's fullscreen rule and lock
 timing apply unchanged. Typing `omarchy launch screensaver` (with spaces) still
 starts the stock one, because that command bypasses `PATH`.
+
+## Releases
+
+Pushing a version tag (`git tag v0.3.0 && git push origin v0.3.0`) makes the
+GitHub workflow in `.github/workflows/release.yml` build the program and
+publish it with the launcher script as a release. The install command always
+fetches the latest one.
 
 ## How it works
 

@@ -1,0 +1,38 @@
+# Build a prebuilt x86_64 Linux release whenever a version tag is pushed:
+#   git tag v0.2.0 && git push origin v0.2.0
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          mkdir -p dist/shan-shui
+          cp target/release/shan-shui scripts/omarchy-launch-screensaver dist/shan-shui/
+          strip dist/shan-shui/shan-shui
+          tar -C dist -czf shan-shui-x86_64-linux.tar.gz shan-shui
+          sha256sum shan-shui-x86_64-linux.tar.gz > shan-shui-x86_64-linux.tar.gz.sha256
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            shan-shui-x86_64-linux.tar.gz shan-shui-x86_64-linux.tar.gz.sha256 \
+            --title "$GITHUB_REF_NAME" --generate-notes

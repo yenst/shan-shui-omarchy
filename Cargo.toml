@@ -1,6 +1,6 @@
 [package]
 name = "shan-shui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Endless shan-shui landscape screensaver for Omarchy (Rust port of LingDong-/shan-shui-inf)"
 repository = "https://github.com/yenst/shan-shui-omarchy"
