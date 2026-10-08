@@ -17,7 +17,7 @@ mod theme;
 mod tree;
 
 use rayon::prelude::*;
-use render::{Paper, TILE_W, VIEW_H, View, pack, render_tile};
+use render::{Draw, Paper, Reveal, TILE_W, TileImage, VIEW_H, View, pack, render_tile};
 use scene::{CHUNK, MARGIN, World};
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
@@ -41,6 +41,10 @@ const LOOKAHEAD: i64 = 2;
 /// us doesn't immediately close the window.
 const GRACE: Duration = Duration::from_millis(1000);
 const FADE: f64 = 0.8;
+/// The drawing front sits this far across the screen.
+const FRONT: f64 = 0.75;
+/// On startup the first screen is painted from a blank page over this long.
+const FIRST_PAGE: f64 = 25.0;
 
 const USAGE: &str = "\
 shan-shui — endless shan-shui landscape screensaver
@@ -58,9 +62,12 @@ USAGE: shan-shui [OPTIONS]
   --bg HEX --fg HEX override paper and ink colors
   --paper           use the original's paper and ink instead of the theme
   --grain F         paper grain strength 0..1 (default 0.5)
+  --no-draw         show the painting finished instead of drawing it stroke
+                    by stroke
   --png PATH        render one frame to PATH and exit
   --size WxH        frame size for --png (default 2880x1920)
   --at X            painting x position for --png (default 0)
+  --version         print the version
 ";
 
 #[derive(Clone)]
@@ -73,6 +80,7 @@ struct Args {
     app_id: String,
     pal: Palette,
     grain: f32,
+    draw: bool,
     png: Option<String>,
     size: (u32, u32),
     at: f64,
@@ -88,6 +96,7 @@ fn parse_args() -> Result<Args, String> {
         app_id: "shan-shui".into(),
         pal: theme::load().unwrap_or(theme::PAPER),
         grain: 0.5,
+        draw: true,
         png: None,
         size: (2880, 1920),
         at: 0.0,
@@ -110,6 +119,7 @@ fn parse_args() -> Result<Args, String> {
             "--fg" => a.pal.fg = theme::parse_hex(&val()?).ok_or("bad --fg color")?,
             "--paper" => a.pal = theme::PAPER,
             "--grain" => a.grain = num(val()?)?.clamp(0.0, 1.0) as f32,
+            "--no-draw" => a.draw = false,
             "--png" => a.png = Some(val()?),
             "--size" => {
                 let s = val()?;
@@ -117,6 +127,10 @@ fn parse_args() -> Result<Args, String> {
                 a.size = (w.parse().map_err(|_| "bad width")?, h.parse().map_err(|_| "bad height")?);
             }
             "--at" => a.at = num(val()?)?,
+            "-V" | "--version" => {
+                println!("shan-shui {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "-h" | "--help" => {
                 print!("{USAGE}");
                 std::process::exit(0);
@@ -155,7 +169,7 @@ fn scale_for(height: u32, zoom: f64) -> f64 {
 fn render_png(args: &Args, path: &str) {
     let (w, h) = args.size;
     let scale = scale_for(h, args.zoom);
-    let view = View { scale, height: h, pal: args.pal, grain: args.grain };
+    let view = View { scale, height: h, pal: args.pal, grain: args.grain, draw: None };
     let paper = Paper::new(args.seed, scale);
     let ox = (args.at * scale).floor() as i64;
     let tw = TILE_W as i64;
@@ -169,7 +183,7 @@ fn render_png(args: &Args, path: &str) {
 
     let t = Instant::now();
     let tiles: HashMap<i64, Vec<u32>> =
-        (t0..=t1).into_par_iter().map(|i| (i, render_tile(&world.items, i, &view, &paper))).collect();
+        (t0..=t1).into_par_iter().map(|i| (i, render_tile(&world.items, i, &view, &paper).disp)).collect();
     eprintln!("rendered {} tiles in {:?}", tiles.len(), t.elapsed());
 
     let mut pm = tiny_skia::Pixmap::new(w, h).expect("size");
@@ -205,11 +219,11 @@ struct Shared {
 struct TileMsg {
     epoch: u64,
     idx: i64,
-    data: Vec<u32>,
+    img: TileImage,
 }
 
 /// Background thread: grows the world and renders tiles around the view.
-fn producer(shared: Arc<Shared>, tx: Sender<TileMsg>, seed: u64, pal: Palette, grain: f32) {
+fn producer(shared: Arc<Shared>, tx: Sender<TileMsg>, seed: u64, pal: Palette, grain: f32, draw: bool) {
     let batch = rayon::current_num_threads().max(2);
     let mut world = World::new(seed, -2.0 * CHUNK);
     let mut done: HashSet<i64> = HashSet::new();
@@ -232,7 +246,9 @@ fn producer(shared: Arc<Shared>, tx: Sender<TileMsg>, seed: u64, pal: Palette, g
         if req.epoch != epoch {
             epoch = req.epoch;
             done.clear();
-            view = Some(View { scale: req.scale, height: req.height, pal, grain });
+            let width = req.width as f64 / req.scale;
+            let draw = draw.then_some(Draw { width, front: FRONT * width });
+            view = Some(View { scale: req.scale, height: req.height, pal, grain, draw });
             paper = Some(Paper::new(seed, req.scale));
         }
         let (view, paper) = (view.as_ref().unwrap(), paper.as_ref().unwrap());
@@ -251,11 +267,11 @@ fn producer(shared: Arc<Shared>, tx: Sender<TileMsg>, seed: u64, pal: Palette, g
         }
         let edge = (missing[missing.len() - 1] + 1) as f64 * tw / req.scale + MARGIN;
         world.generate_until(edge);
-        let tiles: Vec<(i64, Vec<u32>)> =
+        let tiles: Vec<(i64, TileImage)> =
             missing.par_iter().map(|&i| (i, render_tile(&world.items, i, view, paper))).collect();
-        for (idx, data) in tiles {
+        for (idx, img) in tiles {
             done.insert(idx);
-            if tx.send(TileMsg { epoch, idx, data }).is_err() {
+            if tx.send(TileMsg { epoch, idx, img }).is_err() {
                 return;
             }
         }
@@ -264,6 +280,9 @@ fn producer(shared: Arc<Shared>, tx: Sender<TileMsg>, seed: u64, pal: Palette, g
 
 struct Tile {
     data: Vec<u32>,
+    /// pixels still to ink, sorted; `next` is the first one not inked yet
+    reveal: Vec<Reveal>,
+    next: usize,
     born: Instant,
 }
 
@@ -280,6 +299,8 @@ struct App {
     scale: f64,
     cursor_px: f64,
     scrolling: bool,
+    /// when the first page started being painted
+    painting: Option<Instant>,
     started: Instant,
     last: Instant,
     next_frame: Instant,
@@ -291,8 +312,8 @@ impl App {
         let shared = Arc::new(Shared::default());
         let (tx, rx) = channel();
         let thread = {
-            let (shared, seed, pal, grain) = (shared.clone(), args.seed, args.pal, args.grain);
-            std::thread::spawn(move || producer(shared, tx, seed, pal, grain))
+            let (shared, seed, pal, grain, draw) = (shared.clone(), args.seed, args.pal, args.grain, args.draw);
+            std::thread::spawn(move || producer(shared, tx, seed, pal, grain, draw))
         };
         let now = Instant::now();
         App {
@@ -308,6 +329,7 @@ impl App {
             scale: 1.0,
             cursor_px: 0.0,
             scrolling: false,
+            painting: None,
             started: now,
             last: now,
             next_frame: now,
@@ -360,6 +382,7 @@ impl App {
         self.epoch += 1;
         self.tiles.clear();
         self.scrolling = false;
+        self.painting = None;
         self.publish();
     }
 
@@ -367,7 +390,8 @@ impl App {
         let now = Instant::now();
         while let Ok(m) = self.rx.try_recv() {
             if m.epoch == self.epoch {
-                self.tiles.insert(m.idx, Tile { data: m.data, born: now });
+                let TileImage { disp, reveal } = m.img;
+                self.tiles.insert(m.idx, Tile { data: disp, reveal, next: 0, born: now });
             }
         }
         let (w, h) = self.size;
@@ -382,6 +406,7 @@ impl App {
         let (t0, t1) = (ox.div_euclid(tw), (ox + w as i64 - 1).div_euclid(tw));
         if !self.scrolling && (t0..=t1).all(|t| self.tiles.contains_key(&t)) {
             self.scrolling = true;
+            self.painting = Some(now);
         }
         if self.scrolling {
             let before = ox.div_euclid(tw);
@@ -395,6 +420,25 @@ impl App {
         }
 
         let (Some(window), Some(surface)) = (self.window.as_ref(), self.surface.as_mut()) else { return };
+        // Ink every pixel whose moment has come. The front starts a screen
+        // behind so the first page is painted from blank paper.
+        if self.args.draw {
+            let width = w as f64 / self.scale;
+            let first = self.painting.map_or(1.0, |t| (1.0 - (now - t).as_secs_f64() / FIRST_PAGE).max(0.0));
+            let pos = (self.cursor_px / self.scale + FRONT * width - first * width) as f32;
+            for t in ox.div_euclid(tw)..=(ox + w as i64 - 1).div_euclid(tw) {
+                let Some(tl) = self.tiles.get_mut(&t) else { continue };
+                while let Some(r) = tl.reveal.get(tl.next).filter(|r| r.key <= pos) {
+                    tl.data[r.idx as usize] = r.color;
+                    tl.next += 1;
+                }
+                if tl.next == tl.reveal.len() && tl.next > 0 {
+                    tl.reveal = Vec::new();
+                    tl.next = 0;
+                }
+            }
+        }
+
         let Ok(mut buf) = surface.buffer_mut() else { return };
         let bg = pack(self.args.pal.bg);
         let (wu, hu) = (w as usize, h as usize);
@@ -412,7 +456,7 @@ impl App {
                     }
                 }
                 Some(tl) => {
-                    let f = ((now - tl.born).as_secs_f64() / FADE).min(1.0);
+                    let f = if self.args.draw { 1.0 } else { ((now - tl.born).as_secs_f64() / FADE).min(1.0) };
                     for y in 0..hu {
                         let src = &tl.data[y * TILE_W as usize + off..y * TILE_W as usize + off + (x1 - x0)];
                         let dst = &mut buf[y * wu + x0..y * wu + x1];
